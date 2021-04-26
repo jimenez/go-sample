@@ -1,16 +1,19 @@
-FROM golang:1.16
+# build stage
+FROM golang:1.16-alpine AS builder
 
-EXPOSE 8080
-
-HEALTHCHECK --interval=10s --timeout=10s --start-period=5s --retries=3 CMD curl -f localhost:8080/ping || exit 1
-
+# gcc and musl needed by sqlite golang driver that has CGO bindings
+RUN apk --no-cache add gcc musl-dev 
 WORKDIR /go/src/app
-
 COPY . . 
-
 RUN go get -d -v ./...
+RUN go build -o /go/bin/app -v ./...
 
-RUN go install -v ./...
 
-ENTRYPOINT ["go-sample"]
+# final stage
+FROM alpine:latest
 
+RUN apk --no-cache add ca-certificates curl 
+COPY --from=builder /go/bin/app /app
+ENTRYPOINT  /app
+EXPOSE 8080
+HEALTHCHECK --interval=10s --timeout=10s --start-period=5s --retries=3 CMD curl -f localhost:8080/ping || exit 1

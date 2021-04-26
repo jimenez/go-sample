@@ -14,9 +14,12 @@ import (
 const (
 	dbdriver           string = "sqlite3"
 	dbpath             string = "/var/db/objects.db"
-	createTableQuery   string = "CREATE TABLE IF NOT EXISTS objects (key INTEGER PRIMARY KEY AUTOINCREMENT, value VARCHAR(64) NULL)"
+	createTableQuery   string = "CREATE TABLE IF NOT EXISTS objects (key INTEGER PRIMARY KEY AUTOINCREMENT, value TEXT NULL)"
 	selectObjectsQuery string = "SELECT key, value FROM objects"
-	selectObjectQuery  string = "SELECT value FROM objects WHERE key=$1"
+	selectObjectQuery  string = "SELECT value FROM objects WHERE key=?"
+	insertQuery        string = "INSERT INTO objects (value) VALUES (?)"
+
+	MAX_VALUE_SIZE int = 64
 )
 
 type Object struct {
@@ -27,7 +30,7 @@ type Object struct {
 type Error struct {
 	Status  int    `json:"status"`
 	Message string `json:"message"`
-	Error   error  `json:"error"`
+	Error   error  `json:"error,omitempty"`
 }
 
 func writeError(w http.ResponseWriter, statusCode int, msg string, err error) {
@@ -58,7 +61,12 @@ func createTable(db *sql.DB) error {
 func getObjects(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
 		// get all objects from DB
-		rows, _ := db.Query(selectObjectsQuery)
+		rows, err := db.Query(selectObjectsQuery)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to select objects from database", err)
+			return
+		}
+		defer rows.Close()
 
 		objects := []Object{}
 		for rows.Next() {
@@ -87,6 +95,12 @@ func getObject(db *sql.DB) http.HandlerFunc {
 		// get object from DB
 		row := db.QueryRow(selectObjectQuery, key)
 
+		// check if row can be scanned
+		if err := row.Err(); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to select object from database", err)
+			return
+		}
+
 		o := Object{
 			Key: key,
 		}
@@ -113,14 +127,17 @@ func postObject(db *sql.DB) http.HandlerFunc {
 			log.Error().Err(err)
 		}
 
+		if len(o.Value) > MAX_VALUE_SIZE {
+			writeError(w, http.StatusRequestEntityTooLarge, "payload max size is "+strconv.Itoa(MAX_VALUE_SIZE), nil)
+			return
+		}
+
 		// insert object in to DB
-		st, _ := db.Prepare("INSERT INTO objects (value) VALUES (?)")
-		res, err := st.Exec(o.Value)
+		res, err := db.Exec(insertQuery, o.Value)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "couldn't insert object into database", err)
 			return
 		}
-		st.Close()
 		id, err := res.LastInsertId()
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "couldn't read last insertion from database", err)
