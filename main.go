@@ -8,6 +8,7 @@ import (
 
 	"github.com/gorilla/mux"
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/rs/zerolog/hlog"
 	"github.com/rs/zerolog/log"
 )
 
@@ -59,6 +60,7 @@ func createTable(db *sql.DB) error {
 }
 
 func getObjects(db *sql.DB) http.HandlerFunc {
+	// TODO implement pagination
 	return func(w http.ResponseWriter, req *http.Request) {
 		// get all objects from DB
 		rows, err := db.Query(selectObjectsQuery)
@@ -78,6 +80,7 @@ func getObjects(db *sql.DB) http.HandlerFunc {
 			}
 			objects = append(objects, o)
 		}
+		hlog.FromRequest(req).Info().Int("count", len(objects)).Msg("got objects from database")
 		writeJSON(w, objects)
 	}
 }
@@ -113,6 +116,7 @@ func getObject(db *sql.DB) http.HandlerFunc {
 				writeError(w, http.StatusInternalServerError, "failed to get object from database", err)
 			}
 		} else {
+			hlog.FromRequest(req).Info().Interface("object", o).Msg("got object from database")
 			writeJSON(w, o)
 		}
 	}
@@ -144,6 +148,7 @@ func postObject(db *sql.DB) http.HandlerFunc {
 			return
 		}
 		o.Key = uint64(id)
+		hlog.FromRequest(req).Info().Interface("object", o).Msg("post objects to database")
 		writeJSON(w, o)
 		log.Info().Str("value", o.Value).Uint64("key", o.Key).Msg("object inserted into database")
 	}
@@ -173,6 +178,13 @@ func main() {
 	}
 
 	r := mux.NewRouter()
+
+	// populate logger with custom fields
+	r.Use(hlog.NewHandler(log.Logger))
+	r.Use(hlog.RemoteAddrHandler("ip"))
+	r.Use(hlog.MethodHandler("method"))
+	r.Use(hlog.URLHandler("url"))
+
 	r.HandleFunc("/object", postObject(db)).Methods("POST")
 	r.HandleFunc("/object/{key:[0-9]+}", getObject(db)).Methods("GET")
 	r.HandleFunc("/objects", getObjects(db)).Methods("GET")
